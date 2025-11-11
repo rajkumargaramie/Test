@@ -2,7 +2,7 @@ name: Sync PR Comment to Linked Issue
 
 on:
   issue_comment:
-    types: [created]
+    types: [created, edited, deleted]
 
 permissions:
   issues: write
@@ -18,87 +18,169 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const commenter = context.payload.comment.user.login;
-            const commenterType = context.payload.comment.user.type;
-            
-            // Exclude bot accounts
-            const excludedBots = [
-              'github-actions[bot]',
-              'github-actions',
-              'copilot'
-            ];
-            
-            const isBot = commenterType === 'Bot' || 
-                         excludedBots.some(bot => commenter.toLowerCase().includes(bot.toLowerCase()));
-            
-            if (isBot) {
-              core.info(`Skipping bot comment from ${commenter}`);
-              return;
-            }
+            // Helper function to get all linked issues
+            async function getLinkedIssues(prNumber) {
+              const pr = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
 
-            // Get PR details
-            const pr = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.issue.number
-            });
-
-            // Collect all linked issues
-            const linkedIssueNumbers = new Set();
-            
-            // Search for keyword-based links in PR title and body
-            const text = `${pr.data.title}\n\n${pr.data.body || ''}`;
-            const keywordMatches = text.matchAll(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi);
-            for (const match of keywordMatches) {
-              linkedIssueNumbers.add(match[1]);
-            }
-            
-            // Use GraphQL to get ALL linked issues (including manually linked ones)
-            try {
-              const query = `
-                query($owner: String!, $repo: String!, $number: Int!) {
-                  repository(owner: $owner, name: $repo) {
-                    pullRequest(number: $number) {
-                      closingIssuesReferences(first: 50) {
-                        nodes {
-                          number
+              const linkedIssues = new Set();
+              
+              // Search for keyword-based links
+              const text = `${pr.data.title}\n\n${pr.data.body || ''}`;
+              const keywordMatches = text.matchAll(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi);
+              for (const match of keywordMatches) {
+                linkedIssues.add(match[1]);
+              }
+              
+              // Get GraphQL linked issues
+              try {
+                const result = await github.graphql(`
+                  query($owner: String!, $repo: String!, $number: Int!) {
+                    repository(owner: $owner, name: $repo) {
+                      pullRequest(number: $number) {
+                        closingIssuesReferences(first: 50) {
+                          nodes { number }
                         }
                       }
                     }
                   }
+                `, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  number: prNumber
+                });
+                
+                for (const issue of result.repository.pullRequest.closingIssuesReferences.nodes) {
+                  linkedIssues.add(issue.number.toString());
                 }
-              `;
-              
-              const result = await github.graphql(query, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                number: context.payload.issue.number
-              });
-              
-              const graphqlIssues = result.repository.pullRequest.closingIssuesReferences.nodes;
-              for (const issue of graphqlIssues) {
-                linkedIssueNumbers.add(issue.number.toString());
+              } catch (error) {
+                core.warning(`Could not fetch linked issues via GraphQL: ${error.message}`);
               }
-            } catch (error) {
-              core.warning(`Could not fetch linked issues via GraphQL: ${error.message}`);
+
+              return { pr, linkedIssues };
             }
+
+            // Helper function to find synced comment
+            async function findSyncedComment(issueNumber, commentId) {
+              try {
+                let page = 1;
+                const perPage = 100;
+                const maxPages = 10; // Limit to prevent infinite loops (1000 comments max)
+                
+                while (page <= maxPages) {
+                  const comments = await github.rest.issues.listComments({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: Number(issueNumber),
+                    per_page: perPage,
+                    page: page
+                  });
+                  
+                  if (comments.data.length === 0) break;
+                  
+                  const found = comments.data.find(c => 
+                    c.body && c.body.includes(`<!-- pr-comment-sync: ${commentId} -->`)
+                  );
+                  
+                  if (found) return found;
+                  if (comments.data.length < perPage) break;
+                  page++;
+                }
+              } catch (error) {
+                core.warning(`Failed to fetch comments for issue #${issueNumber}: ${error.message}`);
+              }
+              
+              return null;
+            }
+
+            // Skip bot comments
+            const commenter = context.payload.comment.user.login;
+            const excludedBots = ['github-actions[bot]', 'github-actions', 'copilot'];
             
-            if (linkedIssueNumbers.size === 0) {
+            if (context.payload.comment.user.type === 'Bot' || 
+                excludedBots.some(bot => commenter.toLowerCase().includes(bot.toLowerCase()))) {
+              core.info(`Skipping bot comment from ${commenter}`);
+              return;
+            }
+
+            const { pr, linkedIssues } = await getLinkedIssues(context.payload.issue.number);
+            
+            if (linkedIssues.size === 0) {
               core.info('No linked issues found.');
               return;
             }
 
-            core.info(`Syncing comment to ${linkedIssueNumbers.size} linked issue(s): ${Array.from(linkedIssueNumbers).join(', ')}`);
+            const action = context.payload.action;
+            const commentId = context.payload.comment.id;
 
-            // Sync comment to ALL linked issues
-            for (const issueNumber of linkedIssueNumbers) {
+            // Handle delete
+            if (action === 'deleted') {
+              core.info(`Deleting synced comments for PR comment ${commentId}`);
+              
+              for (const issueNumber of linkedIssues) {
+                try {
+                  const syncedComment = await findSyncedComment(issueNumber, commentId);
+                  
+                  if (syncedComment) {
+                    await github.rest.issues.deleteComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      comment_id: syncedComment.id
+                    });
+                    core.info(`Deleted synced comment from issue #${issueNumber}`);
+                  }
+                } catch (error) {
+                  core.error(`Failed to delete from issue #${issueNumber}: ${error.message}`);
+                }
+              }
+              return;
+            }
+
+            // Handle create/edit
+            const isEdit = action === 'edited';
+            core.info(`${isEdit ? 'Updating' : 'Syncing'} comment to ${linkedIssues.size} linked issue(s): ${Array.from(linkedIssues).join(', ')}`);
+
+            // Get comment body and handle null/empty cases
+            const commentText = (context.payload.comment.body || '').trim();
+            
+            if (!commentText) {
+              core.info('Skipping empty comment');
+              return;
+            }
+
+            // Quote the comment body properly for markdown
+            const quotedBody = commentText.split('\n').map(line => `> ${line}`).join('\n');
+
+            const commentBody = `↩️ **Update from [PR #${context.payload.issue.number}](${pr.data.html_url})**\n\n${quotedBody}\n\n_Comment by [@${context.payload.comment.user.login}](${context.payload.comment.user.html_url})${isEdit ? ' (edited)' : ''}_\n\n<!-- pr-comment-sync: ${commentId} -->`;
+
+            for (const issueNumber of linkedIssues) {
               try {
+                if (isEdit) {
+                  const existingComment = await findSyncedComment(issueNumber, commentId);
+                  
+                  if (existingComment) {
+                    await github.rest.issues.updateComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      comment_id: existingComment.id,
+                      body: commentBody
+                    });
+                    core.info(`Updated comment on issue #${issueNumber}`);
+                    continue;
+                  }
+                }
+                
+                // Create new comment (for new comments or edits without existing sync)
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: Number(issueNumber),
-                  body: `↩️ **Update from [PR #${context.payload.issue.number}](${pr.data.html_url})**\n\n> ${context.payload.comment.body.trim()}\n\n_Comment by [@${context.payload.comment.user.login}](${context.payload.comment.user.html_url})_`
+                  body: commentBody
                 });
+                core.info(`Created comment on issue #${issueNumber}`);
               } catch (error) {
                 core.error(`Failed to sync to issue #${issueNumber}: ${error.message}`);
               }
