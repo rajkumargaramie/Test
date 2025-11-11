@@ -3,7 +3,6 @@ name: Sync PR Comment to Linked Issue
 on:
   issue_comment:
     types: [created]
-  # Force refresh
 
 permissions:
   issues: write
@@ -47,15 +46,14 @@ jobs:
             // Collect all linked issues
             const linkedIssueNumbers = new Set();
             
-            // 1. Search for keyword-based links in PR title and body
+            // Search for keyword-based links in PR title and body
             const text = `${pr.data.title}\n\n${pr.data.body || ''}`;
             const keywordMatches = text.matchAll(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi);
             for (const match of keywordMatches) {
               linkedIssueNumbers.add(match[1]);
-              core.info(`Found issue #${match[1]} via keyword in PR description`);
             }
             
-            // 2. Use GraphQL to get ALL linked issues (including manually linked ones)
+            // Use GraphQL to get ALL linked issues (including manually linked ones)
             try {
               const query = `
                 query($owner: String!, $repo: String!, $number: Int!) {
@@ -80,10 +78,9 @@ jobs:
               const graphqlIssues = result.repository.pullRequest.closingIssuesReferences.nodes;
               for (const issue of graphqlIssues) {
                 linkedIssueNumbers.add(issue.number.toString());
-                core.info(`Found issue #${issue.number} via GraphQL`);
               }
             } catch (error) {
-              core.info(`Could not fetch linked issues via GraphQL: ${error.message}`);
+              core.warning(`Could not fetch linked issues via GraphQL: ${error.message}`);
             }
             
             if (linkedIssueNumbers.size === 0) {
@@ -91,7 +88,7 @@ jobs:
               return;
             }
 
-            core.info(`Total linked issues found: ${linkedIssueNumbers.size}`);
+            core.info(`Syncing comment to ${linkedIssueNumbers.size} linked issue(s): ${Array.from(linkedIssueNumbers).join(', ')}`);
 
             // Sync comment to ALL linked issues
             for (const issueNumber of linkedIssueNumbers) {
@@ -102,8 +99,7 @@ jobs:
                   issue_number: Number(issueNumber),
                   body: `↩️ **Update from [PR #${context.payload.issue.number}](${pr.data.html_url})**\n\n> ${context.payload.comment.body.trim()}\n\n_Comment by [@${context.payload.comment.user.login}](${context.payload.comment.user.html_url})_`
                 });
-                core.info(`Successfully synced comment to issue #${issueNumber}`);
               } catch (error) {
-                core.error(`Failed to sync comment to issue #${issueNumber}: ${error.message}`);
+                core.error(`Failed to sync to issue #${issueNumber}: ${error.message}`);
               }
             }
