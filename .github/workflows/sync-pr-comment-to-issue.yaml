@@ -44,61 +44,66 @@ jobs:
               pull_number: context.payload.issue.number
             });
 
-            // Search for linked issue in PR title and body
+            // Collect all linked issues
+            const linkedIssueNumbers = new Set();
+            
+            // 1. Search for keyword-based links in PR title and body
             const text = `${pr.data.title}\n\n${pr.data.body || ''}`;
-            // Match keywords (closes, fixes, resolves) followed by issue number
-            const match = text.match(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i);
+            const keywordMatches = text.matchAll(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi);
+            for (const match of keywordMatches) {
+              linkedIssueNumbers.add(match[1]);
+              core.info(`Found issue #${match[1]} via keyword in PR description`);
+            }
             
-            let issueNumber = match ? match[1] : null;
-            
-            // If no keyword match, use GraphQL to get linked issues
-            if (!issueNumber) {
-              try {
-                const query = `
-                  query($owner: String!, $repo: String!, $number: Int!) {
-                    repository(owner: $owner, name: $repo) {
-                      pullRequest(number: $number) {
-                        closingIssuesReferences(first: 10) {
-                          nodes {
-                            number
-                          }
+            // 2. Use GraphQL to get ALL linked issues (including manually linked ones)
+            try {
+              const query = `
+                query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                      closingIssuesReferences(first: 50) {
+                        nodes {
+                          number
                         }
                       }
                     }
                   }
-                `;
-                
-                const result = await github.graphql(query, {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  number: context.payload.issue.number
-                });
-                
-                const linkedIssues = result.repository.pullRequest.closingIssuesReferences.nodes;
-                core.info(`Found ${linkedIssues.length} linked issues via GraphQL`);
-                
-                if (linkedIssues && linkedIssues.length > 0) {
-                  issueNumber = linkedIssues[0].number.toString();
-                  core.info(`Using linked issue #${issueNumber}`);
                 }
-              } catch (error) {
-                core.info(`Could not fetch linked issues via GraphQL: ${error.message}`);
+              `;
+              
+              const result = await github.graphql(query, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                number: context.payload.issue.number
+              });
+              
+              const graphqlIssues = result.repository.pullRequest.closingIssuesReferences.nodes;
+              for (const issue of graphqlIssues) {
+                linkedIssueNumbers.add(issue.number.toString());
+                core.info(`Found issue #${issue.number} via GraphQL`);
               }
+            } catch (error) {
+              core.info(`Could not fetch linked issues via GraphQL: ${error.message}`);
             }
             
-            if (!issueNumber) {
-              core.info('No linked issue found in PR title or body.');
+            if (linkedIssueNumbers.size === 0) {
+              core.info('No linked issues found.');
               return;
             }
 
-            core.info(`Found linked issue #${issueNumber}`);
+            core.info(`Total linked issues found: ${linkedIssueNumbers.size}`);
 
-            // Create comment on the linked issue
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: Number(issueNumber),
-              body: `↩️ **Update from [PR #${context.payload.issue.number}](${pr.data.html_url})**\n\n> ${context.payload.comment.body.trim()}\n\n_Comment by [@${context.payload.comment.user.login}](${context.payload.comment.user.html_url})_`
-            });
-
-            core.info(`Successfully synced comment to issue #${issueNumber}`);
+            // Sync comment to ALL linked issues
+            for (const issueNumber of linkedIssueNumbers) {
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: Number(issueNumber),
+                  body: `↩️ **Update from [PR #${context.payload.issue.number}](${pr.data.html_url})**\n\n> ${context.payload.comment.body.trim()}\n\n_Comment by [@${context.payload.comment.user.login}](${context.payload.comment.user.html_url})_`
+                });
+                core.info(`Successfully synced comment to issue #${issueNumber}`);
+              } catch (error) {
+                core.error(`Failed to sync comment to issue #${issueNumber}: ${error.message}`);
+              }
+            }
