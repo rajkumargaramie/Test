@@ -50,61 +50,40 @@ jobs:
             
             let issueNumber = match ? match[1] : null;
             
-            // If no keyword match, use GraphQL to get all linked issues (open or closed)
+            // If no keyword match, use REST API to get timeline events
             if (!issueNumber) {
               try {
-                const query = `query($owner: String!, $repo: String!, $number: Int!) {
-                  repository(owner: $owner, name: $repo) {
-                    pullRequest(number: $number) {
-                      closingIssuesReferences(first: 10) {
-                        nodes {
-                          number
-                          state
-                        }
-                      }
-                      timelineItems(first: 50, itemTypes: [CONNECTED_EVENT, DISCONNECTED_EVENT]) {
-                        nodes {
-                          ... on ConnectedEvent {
-                            source {
-                              ... on Issue {
-                                number
-                                state
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }`;
-                
-                const result = await github.graphql(query, {
+                const { data: timeline } = await github.rest.issues.listEventsForTimeline({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  number: context.payload.issue.number
+                  issue_number: context.payload.issue.number,
+                  per_page: 100
                 });
                 
-                // First try closingIssuesReferences (for open issues with keywords)
-                let linkedIssues = result.repository.pullRequest.closingIssuesReferences.nodes;
+                core.info(`Fetched ${timeline.length} timeline events`);
                 
-                // Then check timeline for manually linked issues (including closed ones)
-                if ((!linkedIssues || linkedIssues.length === 0) && result.repository.pullRequest.timelineItems.nodes) {
-                  const connectedIssues = result.repository.pullRequest.timelineItems.nodes
-                    .filter(node => node.source && node.source.number)
-                    .map(node => node.source);
+                // Look for connected events
+                const connectedEvents = timeline.filter(event => event.event === 'connected');
+                core.info(`Found ${connectedEvents.length} connected events`);
+                
+                if (connectedEvents.length > 0) {
+                  // Log the structure to debug
+                  core.info(`First connected event: ${JSON.stringify(connectedEvents[0], null, 2)}`);
                   
-                  if (connectedIssues.length > 0) {
-                    linkedIssues = connectedIssues;
-                    core.info(`Found ${connectedIssues.length} manually linked issue(s)`);
+                  // Try different possible structures
+                  const firstEvent = connectedEvents[0];
+                  if (firstEvent.source && firstEvent.source.issue && firstEvent.source.issue.number) {
+                    issueNumber = firstEvent.source.issue.number.toString();
+                  } else if (firstEvent.issue && firstEvent.issue.number) {
+                    issueNumber = firstEvent.issue.number.toString();
+                  }
+                  
+                  if (issueNumber) {
+                    core.info(`Found manually linked issue #${issueNumber}`);
                   }
                 }
-                
-                if (linkedIssues && linkedIssues.length > 0) {
-                  issueNumber = linkedIssues[0].number.toString();
-                  core.info(`Found linked issue #${issueNumber} (state: ${linkedIssues[0].state || 'unknown'})`);
-                }
               } catch (error) {
-                core.info(`Could not fetch linked issues via GraphQL: ${error.message}`);
+                core.info(`Could not fetch timeline events: ${error.message}`);
               }
             }
             
