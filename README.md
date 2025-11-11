@@ -9,4 +9,4 @@ Automatically copies comments from pull requests to their linked issues, keeping
 
 [📖 Read full documentation](docs/sync-pr-comment-workflow.md)
 
-### 2. Test Feature
+### 2. Test Feature - Verify Workflow
