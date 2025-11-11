@@ -1,50 +1,42 @@
 # Sync PR Comment to Linked Issue
 
-## What it does
+Automatically syncs PR comments to all linked issues, keeping discussions in one place.
 
-Automatically copies comments from pull requests to their linked issues, keeping discussions synchronized.
+## Features
 
-## How it works
+- ✅ Syncs comments to **all** linked issues (keyword-based and manual)
+- ✅ Updates synced comments when PR comment is edited
+- ✅ Deletes synced comments when PR comment is deleted
+- ✅ Skips bot comments automatically
 
-1. Someone comments on a pull request
-2. The workflow finds any linked issue (referenced with `fixes #123`, `closes #456`, etc.)
-3. The comment is copied to the linked issue with attribution
-4. Bot comments are automatically skipped
+## How to link issues
 
-## Trigger
-
-Runs automatically when a comment is created on a pull request.
-
-## Usage
-
-**In your pull request description or title, reference an issue:**
-
+**Option 1: Keywords** - Add to PR description or title:
 ```
 Fixes #1
 Closes #2
 Resolves #3
 ```
+Supported: `close/closes/closed`, `fix/fixes/fixed`, `resolve/resolves/resolved`
 
-**Then comment on the PR:**
+**Option 2: Manual** - Use GitHub's "Development" sidebar to link issues
 
-Any comment you add will be automatically synced to the linked issue.
+## Comment format
 
-## Example
+PR comment → Creates on linked issue:
+```
+↩️ Update from PR #10
 
-If PR #10 has "Fixes #5" in its description, and you comment:
+> Your comment here
 
-> "Updated the implementation based on feedback"
+Comment by @username
+```
 
-The workflow will create this comment on issue #5:
+## Limits & Exclusions
 
-> ↩️ **Update from [PR #10](link)**
-> 
-> > Updated the implementation based on feedback
-> 
-> _Comment by [@username](link)_
+- Max 50 linked issues per PR
+- Excluded bots: `github-actions[bot]`, `github-actions`, `copilot`
 
-## Excluded bots
+## Permissions
 
-- github-actions[bot]
-- github-actions
-- copilot
+Required: `issues: write`, `pull-requests: read`
