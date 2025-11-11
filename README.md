@@ -5,6 +5,6 @@ Test Repository
 
 ### 1. 🔄 Sync PR Comments to Linked Issues
 
-Automatically copies comments from pull requests to their linked issues, keeping discussions synchronized across your workflow.
+Automatically syncs PR descriptions and comments to all linked issues with create, edit, and delete support.
 
 [📖 Read full documentation](docs/sync-pr-comment-workflow.md)
