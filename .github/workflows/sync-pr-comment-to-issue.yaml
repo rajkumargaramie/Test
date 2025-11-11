@@ -45,8 +45,32 @@ jobs:
 
             // Search for linked issue in PR title and body
             const text = `${pr.data.title}\n\n${pr.data.body || ''}`;
-            const match = text.match(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)|#(\d+)/i);
-            const issueNumber = match ? (match[1] || match[2]) : null;
+            // Match keywords (closes, fixes, resolves) followed by issue number
+            // or GitHub's auto-linked issues in development section
+            const match = text.match(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i);
+            
+            let issueNumber = match ? match[1] : null;
+            
+            // If no keyword match, check if PR has linked issues via GitHub API
+            if (!issueNumber) {
+              try {
+                const timeline = await github.rest.issues.listEventsForTimeline({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.issue.number
+                });
+                
+                const connectedEvent = timeline.data.find(event => 
+                  event.event === 'connected' && event.source?.issue?.number
+                );
+                
+                if (connectedEvent) {
+                  issueNumber = connectedEvent.source.issue.number.toString();
+                }
+              } catch (error) {
+                core.info('Could not fetch timeline events');
+              }
+            }
             
             if (!issueNumber) {
               core.info('No linked issue found in PR title or body.');
