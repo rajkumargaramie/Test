@@ -51,40 +51,38 @@ jobs:
             
             let issueNumber = match ? match[1] : null;
             
-            // If no keyword match, use REST API to get timeline events
+            // If no keyword match, use GraphQL to get linked issues
             if (!issueNumber) {
               try {
-                const { data: timeline } = await github.rest.issues.listEventsForTimeline({
+                const query = `
+                  query($owner: String!, $repo: String!, $number: Int!) {
+                    repository(owner: $owner, name: $repo) {
+                      pullRequest(number: $number) {
+                        closingIssuesReferences(first: 10) {
+                          nodes {
+                            number
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                const result = await github.graphql(query, {
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  issue_number: context.payload.issue.number,
-                  per_page: 100
+                  number: context.payload.issue.number
                 });
                 
-                core.info(`Fetched ${timeline.length} timeline events`);
+                const linkedIssues = result.repository.pullRequest.closingIssuesReferences.nodes;
+                core.info(`Found ${linkedIssues.length} linked issues via GraphQL`);
                 
-                // Look for connected events
-                const connectedEvents = timeline.filter(event => event.event === 'connected');
-                core.info(`Found ${connectedEvents.length} connected events`);
-                
-                if (connectedEvents.length > 0) {
-                  // Log the structure to debug
-                  core.info(`First connected event: ${JSON.stringify(connectedEvents[0], null, 2)}`);
-                  
-                  // Try different possible structures
-                  const firstEvent = connectedEvents[0];
-                  if (firstEvent.source && firstEvent.source.issue && firstEvent.source.issue.number) {
-                    issueNumber = firstEvent.source.issue.number.toString();
-                  } else if (firstEvent.issue && firstEvent.issue.number) {
-                    issueNumber = firstEvent.issue.number.toString();
-                  }
-                  
-                  if (issueNumber) {
-                    core.info(`Found manually linked issue #${issueNumber}`);
-                  }
+                if (linkedIssues && linkedIssues.length > 0) {
+                  issueNumber = linkedIssues[0].number.toString();
+                  core.info(`Using linked issue #${issueNumber}`);
                 }
               } catch (error) {
-                core.info(`Could not fetch timeline events: ${error.message}`);
+                core.info(`Could not fetch linked issues via GraphQL: ${error.message}`);
               }
             }
             
