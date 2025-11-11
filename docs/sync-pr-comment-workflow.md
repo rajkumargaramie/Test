@@ -1,17 +1,18 @@
 # Sync PR Comment to Linked Issue
 
-Automatically syncs PR comments to all linked issues, keeping discussions in one place.
+Automatically syncs PR comments and descriptions to all linked issues, keeping discussions in one place.
 
 ## Features
 
+- ✅ Syncs PR description on first edit (and subsequent edits)
 - ✅ Syncs comments to **all** linked issues (keyword-based and manual)
-- ✅ Updates synced comments when PR comment is edited
+- ✅ Updates synced content when edited
 - ✅ Deletes synced comments when PR comment is deleted
 - ✅ Skips bot comments automatically
 
 ## How to link issues
 
-**Option 1: Keywords** - Add to PR description or title:
+**Option 1: Keywords** - Add to PR description:
 ```
 Fixes #1
 Closes #2
