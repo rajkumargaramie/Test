@@ -3,6 +3,7 @@ name: Sync PR Comment to Linked Issue
 on:
   issue_comment:
     types: [created]
+  # Force refresh
 
 permissions:
   issues: write
