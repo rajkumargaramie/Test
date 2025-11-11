@@ -3,6 +3,7 @@ name: Sync PR Comment to Linked Issue
 on:
   issue_comment:
     types: [created]
+  # Force refresh
 
 permissions:
   issues: write
@@ -46,29 +47,44 @@ jobs:
             // Search for linked issue in PR title and body
             const text = `${pr.data.title}\n\n${pr.data.body || ''}`;
             // Match keywords (closes, fixes, resolves) followed by issue number
-            // or GitHub's auto-linked issues in development section
             const match = text.match(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i);
             
             let issueNumber = match ? match[1] : null;
             
-            // If no keyword match, check if PR has linked issues via GitHub API
+            // If no keyword match, use REST API to get timeline events
             if (!issueNumber) {
               try {
-                const timeline = await github.rest.issues.listEventsForTimeline({
+                const { data: timeline } = await github.rest.issues.listEventsForTimeline({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  issue_number: context.payload.issue.number
+                  issue_number: context.payload.issue.number,
+                  per_page: 100
                 });
                 
-                const connectedEvent = timeline.data.find(event => 
-                  event.event === 'connected' && event.source?.issue?.number
-                );
+                core.info(`Fetched ${timeline.length} timeline events`);
                 
-                if (connectedEvent) {
-                  issueNumber = connectedEvent.source.issue.number.toString();
+                // Look for connected events
+                const connectedEvents = timeline.filter(event => event.event === 'connected');
+                core.info(`Found ${connectedEvents.length} connected events`);
+                
+                if (connectedEvents.length > 0) {
+                  // Log the structure to debug
+                  core.info(`First connected event: ${JSON.stringify(connectedEvents[0], null, 2)}`);
+                  
+                  // Try different possible structures
+                  const firstEvent = connectedEvents[0];
+                  if (firstEvent.source && firstEvent.source.issue && firstEvent.source.issue.number) {
+                    issueNumber = firstEvent.source.issue.number.toString();
+                  } else if (firstEvent.issue && firstEvent.issue.number) {
+                    issueNumber = firstEvent.issue.number.toString();
+                  }
+                  
+                  if (issueNumber) {
+                    core.info(`Found manually linked issue #${issueNumber}`);
+                  }
                 }
               } catch (error) {
-                core.info('Could not fetch timeline events');
+                core.info(`Could not fetch timeline events: ${error.message}`);
               }
             }
             
