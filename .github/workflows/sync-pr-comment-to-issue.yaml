@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   update-issue:
-    if: github.event.issue.pull_request
+    if: github.event.issue.pull_request != null
     runs-on: ubuntu-latest
     
     steps:
@@ -18,8 +18,8 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const commenter = github.event.comment.user.login;
-            const commenterType = github.event.comment.user.type;
+            const commenter = context.payload.comment.user.login;
+            const commenterType = context.payload.comment.user.type;
             
             // Exclude bot accounts
             const excludedBots = [
@@ -40,7 +40,7 @@ jobs:
             const pr = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: github.event.issue.number
+              pull_number: context.payload.issue.number
             });
 
             // Search for linked issue in PR title and body
@@ -60,7 +60,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: Number(issueNumber),
-              body: `↩️ **Update from [PR #${github.event.issue.number}](${pr.data.html_url})**\n\n> ${github.event.comment.body.trim()}\n\n_Comment by [@${github.event.comment.user.login}](${github.event.comment.user.html_url})_`
+              body: `↩️ **Update from [PR #${context.payload.issue.number}](${pr.data.html_url})**\n\n> ${context.payload.comment.body.trim()}\n\n_Comment by [@${context.payload.comment.user.login}](${context.payload.comment.user.html_url})_`
             });
 
             core.info(`Successfully synced comment to issue #${issueNumber}`);
