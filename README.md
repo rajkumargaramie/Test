@@ -1,7 +1,7 @@
 # Test
 Test Repository
 
-## Features
+## Tickets
 
 ### 1. 🔄 Sync PR Comments to Linked Issues
 
