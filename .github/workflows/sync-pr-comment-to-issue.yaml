@@ -5,6 +5,8 @@ on:
     types: [created, edited, deleted]
   pull_request:
     types: [edited]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
 
 permissions:
   issues: write
@@ -72,11 +74,12 @@ jobs:
               return null;
             }
 
-            async function syncToIssues(prNumber, linkedIssues, text, marker, label, author, isEdit) {
+            async function syncToIssues(prNumber, linkedIssues, text, marker, label, author, isEdit, commentUrl) {
               if (!text.trim()) return core.info('Skipping empty text');
               
               const quotedBody = text.split('\n').map(line => `> ${line}`).join('\n');
-              const commentBody = `↩️ **${label} [PR #${prNumber}](${author.html_url})**\n\n${quotedBody}\n\n_By [@${author.login}](${author.html_url})${isEdit ? ' (edited)' : ''}_\n\n${marker}`;
+              const prLink = commentUrl || `https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber}`;
+              const commentBody = `↩️ **${label} [PR #${prNumber}](${prLink})**\n\n${quotedBody}\n\n_By [@${author.login}](${author.html_url})${isEdit ? ' (edited)' : ''}_\n\n${marker}`;
 
               for (const issueNumber of linkedIssues) {
                 try {
@@ -118,23 +121,45 @@ jobs:
               return;
             }
 
-            // Handle comment events
-            if (context.eventName !== 'issue_comment' || !context.payload.issue.pull_request) return;
-
-            const commenter = context.payload.comment.user;
+            // Handle PR comment and review events
             const excludedBots = ['github-actions[bot]', 'github-actions', 'copilot'];
-            if (commenter.type === 'Bot' || excludedBots.some(bot => commenter.login.toLowerCase().includes(bot.toLowerCase()))) {
-              return core.info(`Skipping bot: ${commenter.login}`);
+            let user, body, itemId, prNumber, htmlUrl, label;
+
+            if (context.eventName === 'issue_comment' && context.payload.issue.pull_request) {
+              user = context.payload.comment.user;
+              body = context.payload.comment.body || '';
+              itemId = context.payload.comment.id;
+              prNumber = context.payload.issue.number;
+              htmlUrl = context.payload.comment.html_url;
+              label = 'Update from';
+            } else if (context.eventName === 'pull_request_review') {
+              user = context.payload.review.user;
+              body = context.payload.review.body || '';
+              itemId = context.payload.review.id;
+              prNumber = context.payload.pull_request.number;
+              htmlUrl = context.payload.review.html_url;
+              label = 'Review from';
+            } else {
+              return;
             }
 
-            const { pr, linkedIssues } = await getLinkedIssues(context.payload.issue.number);
+            // Skip bots
+            if (user.type === 'Bot' || excludedBots.some(bot => user.login.toLowerCase().includes(bot.toLowerCase()))) {
+              return core.info(`Skipping bot: ${user.login}`);
+            }
+
+            // Only process content that contains "issue:" or "ticket:" (case-insensitive)
+            if (!/\b(issue|ticket):/i.test(body)) {
+              return core.info('Content does not contain issue: or ticket:');
+            }
+
+            const { pr, linkedIssues } = await getLinkedIssues(prNumber);
             if (linkedIssues.size === 0) return core.info('No linked issues');
 
-            const commentId = context.payload.comment.id;
-            const marker = `<!-- pr-comment-sync: ${commentId} -->`;
+            const marker = `<!-- pr-${context.eventName === 'pull_request_review' ? 'review' : 'comment'}-sync: ${itemId} -->`;
 
-            // Handle delete
-            if (context.payload.action === 'deleted') {
+            // Handle delete/dismiss
+            if (context.payload.action === 'deleted' || context.payload.action === 'dismissed') {
               for (const issueNumber of linkedIssues) {
                 try {
                   const synced = await findSyncedComment(issueNumber, marker);
@@ -153,8 +178,9 @@ jobs:
               return;
             }
 
-            // Handle create/edit
+            // Handle create/edit/submit
             await syncToIssues(
-              context.payload.issue.number, linkedIssues, context.payload.comment.body || '',
-              marker, 'Update from', commenter, context.payload.action === 'edited'
+              prNumber, linkedIssues, body,
+              marker, label, user, context.payload.action === 'edited',
+              htmlUrl
             );
